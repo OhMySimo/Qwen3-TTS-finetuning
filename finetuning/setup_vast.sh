@@ -1,369 +1,297 @@
 #!/usr/bin/env bash
-# One-click setup script per Vast.ai
-# Esegui questo script SUBITO dopo aver effettuato SSH nell'istanza
+# Setup script for Qwen3-TTS Italian fine-tuning on Vast.ai
+# Can be executed directly with: curl -sSL <URL> | bash
+
 set -e
 
 echo "=========================================="
-echo "🚀 Qwen3-TTS Vast.ai Quick Setup"
+echo "🚀 Qwen3-TTS Italian Training Setup"
 echo "=========================================="
 echo ""
 
-# Controlla se siamo in un ambiente Vast.ai
+# Color codes for better readability
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Check if we're on Vast.ai (optional)
 if [ ! -d "/workspace" ]; then
-    echo "⚠️  Warning: /workspace directory not found."
-    echo "This script is optimized for Vast.ai CUDA template."
-    echo "Creating /workspace..."
+    echo -e "${YELLOW}⚠️  Warning: /workspace not found. Creating it...${NC}"
     mkdir -p /workspace
 fi
 
 cd /workspace
 
-# GPU check
-echo "🔍 Checking GPU availability..."
+# Check prerequisites
+echo "🔍 Checking prerequisites..."
+
+# Check NVIDIA GPU
 if ! command -v nvidia-smi &> /dev/null; then
-    echo "❌ Error: nvidia-smi not found. Are you on a GPU instance?"
+    echo -e "${RED}❌ Error: nvidia-smi not found!${NC}"
+    echo "This script requires a GPU instance."
     exit 1
 fi
 
-nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 NUM_GPUS=$(nvidia-smi --list-gpus | wc -l)
-echo "✓ Found $NUM_GPUS GPU(s)"
+echo -e "${GREEN}✓${NC} Found $NUM_GPUS GPU(s)"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
+
+# Check Python
+if ! command -v python3 &> /dev/null; then
+    echo -e "${RED}❌ Error: python3 not found!${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓${NC} Python $(python3 --version | cut -d' ' -f2)"
+
+# Check pip
+if ! command -v pip &> /dev/null && ! command -v pip3 &> /dev/null; then
+    echo -e "${RED}❌ Error: pip not found!${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓${NC} pip available"
 echo ""
 
-# Verifica Python
-echo "🐍 Checking Python environment..."
-python --version || { echo "❌ Python not found"; exit 1; }
-pip --version || { echo "❌ pip not found"; exit 1; }
+# Clone repository
+echo "=========================================="
+echo "📦 Cloning repository..."
+echo "=========================================="
 echo ""
 
-# Step 1: Clone repository
-echo "=========================================="
-echo "📦 Step 1: Cloning Qwen3-TTS repository..."
-echo "=========================================="
-
-if [ -d "Qwen3-TTS" ]; then
-    echo "✓ Repository already exists, pulling latest changes..."
-    cd Qwen3-TTS
+if [ -d "Qwen3-TTS-finetuning" ]; then
+    echo -e "${YELLOW}Repository already exists, updating...${NC}"
+    cd Qwen3-TTS-finetuning
     git pull
     cd ..
 else
-    echo "Cloning repository..."
-    git clone https://github.com/QwenLM/Qwen3-TTS.git
-    echo "✓ Repository cloned"
+    git clone https://github.com/OhMySimo/Qwen3-TTS-finetuning.git
 fi
 
-cd Qwen3-TTS/finetuning
-echo "Working directory: $(pwd)"
+cd Qwen3-TTS-finetuning/finetuning
+WORK_DIR=$(pwd)
+
+echo -e "${GREEN}✓${NC} Repository ready at: $WORK_DIR"
 echo ""
 
-# Step 2: Install dependencies
+# Install dependencies
 echo "=========================================="
-echo "📚 Step 2: Installing dependencies..."
+echo "📚 Installing dependencies..."
 echo "=========================================="
-
-echo "Installing core packages..."
-pip install --break-system-packages -q qwen-tts
-pip install --break-system-packages -q accelerate
-pip install --break-system-packages -q tensorboard
-pip install --break-system-packages -q soundfile
-
-echo "Installing optional packages for performance..."
-pip install --break-system-packages -q flash-attn --no-build-isolation 2>/dev/null || echo "  (flash-attn skipped, will use default attention)"
-pip install --break-system-packages -q bitsandbytes 2>/dev/null || echo "  (bitsandbytes skipped, will use standard Adam)"
-
-echo ""
-echo "✓ Dependencies installed"
 echo ""
 
-# Verifica installazione
-echo "🔍 Verifying installation..."
-python -c "import torch; print(f'  ✓ PyTorch {torch.__version__}')"
-python -c "import qwen_tts; print('  ✓ qwen-tts')"
-python -c "import accelerate; print('  ✓ accelerate')"
-python -c "import flash_attn; print('  ✓ flash-attention')" 2>/dev/null || echo "  ⚠ flash-attention not available"
-python -c "import bitsandbytes; print('  ✓ bitsandbytes (8-bit optimizer)')" 2>/dev/null || echo "  ⚠ bitsandbytes not available"
-echo ""
+echo "Installing core packages (this may take a few minutes)..."
 
-# Step 3: Download training scripts
-echo "=========================================="
-echo "📝 Step 3: Downloading optimized scripts..."
-echo "=========================================="
+# Determine pip command
+PIP_CMD="pip"
+if command -v pip3 &> /dev/null; then
+    PIP_CMD="pip3"
+fi
 
-# Backup originali se esistono
-for file in sft_12hz.py dataset.py prepare_data.py train_vast.sh; do
-    if [ -f "$file" ]; then
-        mv "$file" "${file}.original"
-        echo "  Backed up: $file → ${file}.original"
-    fi
-done
+# Install with --break-system-packages for Vast.ai containers
+$PIP_CMD install --break-system-packages --quiet qwen-tts
+echo -e "${GREEN}✓${NC} qwen-tts"
 
-# I file aggiornati dovranno essere copiati manualmente o via wget
-echo ""
-echo "⚠️  IMPORTANT: Copy your optimized training files here:"
-echo "     $(pwd)"
-echo ""
-echo "Required files:"
-echo "  • sft_12hz.py (optimized training script)"
-echo "  • dataset.py (dataset loader)"
-echo "  • prepare_data.py (audio tokenization)"
-echo "  • train_vast.sh (training launcher)"
-echo ""
-echo "You can copy them using SCP:"
-echo "  scp -P <PORT> *.py train_vast.sh root@<IP>:$(pwd)/"
-echo ""
+$PIP_CMD install --break-system-packages --quiet accelerate
+echo -e "${GREEN}✓${NC} accelerate"
 
-# Step 4: Setup tensorboard
-echo "=========================================="
-echo "📊 Step 4: Setting up monitoring..."
-echo "=========================================="
+$PIP_CMD install --break-system-packages --quiet tensorboard
+echo -e "${GREEN}✓${NC} tensorboard"
 
-# Create tensorboard service se supervisor è disponibile
-if command -v supervisorctl &> /dev/null; then
-    echo "Setting up Tensorboard as a background service..."
-    
-    cat > /etc/supervisor/conf.d/tensorboard.conf <<EOL
-[program:tensorboard]
-command=tensorboard --logdir=/workspace/Qwen3-TTS/finetuning/output_italian_tts --host=0.0.0.0 --port=6006
-directory=/workspace/Qwen3-TTS/finetuning
-autostart=false
-autorestart=true
-stderr_logfile=/var/log/tensorboard.err.log
-stdout_logfile=/var/log/tensorboard.out.log
-EOL
-    
-    supervisorctl reread
-    supervisorctl update
-    echo "✓ Tensorboard configured (start with: supervisorctl start tensorboard)"
+$PIP_CMD install --break-system-packages --quiet soundfile
+echo -e "${GREEN}✓${NC} soundfile"
+
+echo ""
+echo "Installing optional packages for better performance..."
+
+# Flash Attention (optional but recommended)
+if $PIP_CMD install --break-system-packages --quiet flash-attn --no-build-isolation 2>/dev/null; then
+    echo -e "${GREEN}✓${NC} flash-attention (faster training)"
 else
-    echo "Supervisor not available. Start tensorboard manually when needed:"
-    echo "  tensorboard --logdir output_italian_tts --host 0.0.0.0 --port 6006"
+    echo -e "${YELLOW}⚠${NC} flash-attention (skipped, will use default attention)"
 fi
+
+# Bitsandbytes for 8-bit Adam (optional)
+if $PIP_CMD install --break-system-packages --quiet bitsandbytes 2>/dev/null; then
+    echo -e "${GREEN}✓${NC} bitsandbytes (8-bit optimizer)"
+else
+    echo -e "${YELLOW}⚠${NC} bitsandbytes (skipped, will use standard optimizer)"
+fi
+
 echo ""
 
-# Step 5: Create helper scripts
-echo "=========================================="
-echo "🛠️  Step 5: Creating helper scripts..."
-echo "=========================================="
-
-# Script per scaricare i modelli
-cat > download_models.sh <<'EOF'
-#!/usr/bin/env bash
-echo "Pre-downloading models to avoid delays during training..."
-python -c "
-from transformers import AutoConfig, AutoTokenizer
-from qwen_tts import Qwen3TTSTokenizer
-
-print('Downloading Qwen3-TTS-12Hz-1.7B-Base...')
-AutoConfig.from_pretrained('Qwen/Qwen3-TTS-12Hz-1.7B-Base')
-
-print('Downloading Qwen3-TTS-Tokenizer-12Hz...')
-Qwen3TTSTokenizer.from_pretrained('Qwen/Qwen3-TTS-Tokenizer-12Hz', device_map='cpu')
-
-print('✓ All models downloaded and cached')
-"
-EOF
-chmod +x download_models.sh
-
-# Script per testing checkpoint
-cat > test_checkpoint.py <<'EOF'
-#!/usr/bin/env python
-import argparse
-import torch
-import soundfile as sf
-from qwen_tts import Qwen3TTSModel
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", type=str, required=True)
-    parser.add_argument("--speaker", type=str, default="italian_multi")
-    parser.add_argument("--text", type=str, default="Questo è un test del modello.")
-    parser.add_argument("--output", type=str, default="test_output.wav")
-    args = parser.parse_args()
-
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    
-    print(f"Loading model from {args.checkpoint}...")
-    tts = Qwen3TTSModel.from_pretrained(
-        args.checkpoint,
-        device_map=device,
-        dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",
-    )
-    
-    print(f"Generating audio for: {args.text}")
-    wavs, sr = tts.generate_custom_voice(
-        text=args.text,
-        speaker=args.speaker,
-    )
-    
-    sf.write(args.output, wavs[0], sr)
-    print(f"✓ Audio saved to: {args.output}")
-
-if __name__ == "__main__":
-    main()
-EOF
-chmod +x test_checkpoint.py
-
-# Script per dataset validation
-cat > validate_dataset.py <<'EOF'
-#!/usr/bin/env python
-import json
-import os
-import argparse
-from pathlib import Path
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--jsonl", type=str, required=True)
-    args = parser.parse_args()
-    
-    print(f"Validating {args.jsonl}...")
-    
-    if not os.path.exists(args.jsonl):
-        print(f"❌ File not found: {args.jsonl}")
-        return
-    
-    with open(args.jsonl, 'r') as f:
-        lines = f.readlines()
-    
-    total = len(lines)
-    valid = 0
-    errors = []
-    
-    for i, line in enumerate(lines, 1):
-        try:
-            data = json.loads(line.strip())
-            
-            # Check required fields
-            if 'audio' not in data:
-                errors.append(f"Line {i}: missing 'audio' field")
-                continue
-            if 'text' not in data:
-                errors.append(f"Line {i}: missing 'text' field")
-                continue
-            if 'ref_audio' not in data:
-                errors.append(f"Line {i}: missing 'ref_audio' field")
-                continue
-            
-            # Check if files exist
-            if not os.path.exists(data['audio']):
-                errors.append(f"Line {i}: audio file not found: {data['audio']}")
-                continue
-            if not os.path.exists(data['ref_audio']):
-                errors.append(f"Line {i}: ref_audio file not found: {data['ref_audio']}")
-                continue
-            
-            valid += 1
-            
-        except json.JSONDecodeError:
-            errors.append(f"Line {i}: invalid JSON")
-    
-    print(f"\n📊 Validation Results:")
-    print(f"  Total lines: {total}")
-    print(f"  Valid: {valid}")
-    print(f"  Errors: {len(errors)}")
-    
-    if errors:
-        print(f"\n❌ Found {len(errors)} errors:")
-        for error in errors[:10]:  # Show first 10 errors
-            print(f"  • {error}")
-        if len(errors) > 10:
-            print(f"  ... and {len(errors) - 10} more")
-    else:
-        print("\n✅ All samples are valid!")
-
-if __name__ == "__main__":
-    main()
-EOF
-chmod +x validate_dataset.py
-
-# Monitor script
-cat > monitor_training.sh <<'EOF'
-#!/usr/bin/env bash
-# Live monitoring del training
-clear
-echo "🔍 Training Monitor"
-echo "Press Ctrl+C to exit"
+# Verify installation
+echo "🔍 Verifying installation..."
+python3 -c "import torch; print('  ✓ PyTorch ' + torch.__version__ + (' (CUDA)' if torch.cuda.is_available() else ' (CPU)'))" || exit 1
+python3 -c "import qwen_tts; print('  ✓ qwen-tts')" || exit 1
+python3 -c "import accelerate; print('  ✓ accelerate')" || exit 1
 echo ""
 
-while true; do
-    clear
-    echo "=========================================="
-    echo "📊 GPU Status"
-    echo "=========================================="
-    nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits | 
-        awk -F, '{printf "GPU %s: %s\n  Usage: %s%% | Mem: %sMB/%sMB | Temp: %s°C\n", $1, $2, $3, $4, $5, $6}'
-    
-    echo ""
-    echo "=========================================="
-    echo "📈 Recent Training Logs"
-    echo "=========================================="
-    
-    LOG_FILE=$(ls -t output_italian_tts/training_*.log 2>/dev/null | head -1)
-    if [ -n "$LOG_FILE" ]; then
-        tail -n 15 "$LOG_FILE" | grep -E "(loss|epoch|step)" || echo "No recent logs"
+# Download dataset
+echo "=========================================="
+echo "📊 Downloading Italian dataset..."
+echo "=========================================="
+echo ""
+
+if [ -f "train_raw.jsonl" ]; then
+    NUM_SAMPLES=$(wc -l < train_raw.jsonl 2>/dev/null || echo "0")
+    if [ "$NUM_SAMPLES" -gt "1000" ]; then
+        echo -e "${GREEN}✓${NC} Dataset already exists ($NUM_SAMPLES samples)"
+        SKIP_DOWNLOAD=1
     else
-        echo "No training logs found yet"
+        echo -e "${YELLOW}⚠${NC} Dataset file exists but seems incomplete, re-downloading..."
+        rm -f train_raw.jsonl audio_dataset/ datasetv2.zip
+        SKIP_DOWNLOAD=0
+    fi
+else
+    SKIP_DOWNLOAD=0
+fi
+
+if [ "$SKIP_DOWNLOAD" -eq 0 ]; then
+    echo "Downloading dataset v2 (~500MB)..."
+    
+    if ! wget --show-progress -q https://github.com/OhMySimo/Qwen3-TTS-finetuning/releases/download/it/datasetv2.zip; then
+        echo -e "${RED}❌ Download failed!${NC}"
+        echo "Please check your internet connection and try again."
+        exit 1
     fi
     
-    echo ""
-    echo "=========================================="
-    echo "💾 Checkpoints"
-    echo "=========================================="
-    ls -lht output_italian_tts/checkpoint-* 2>/dev/null | head -5 | awk '{print $9, "(" $5 ")"}'
+    echo "Extracting dataset..."
+    if ! unzip -q datasetv2.zip; then
+        echo -e "${RED}❌ Extraction failed!${NC}"
+        exit 1
+    fi
     
-    sleep 5
-done
-EOF
-chmod +x monitor_training.sh
+    rm datasetv2.zip
+    
+    NUM_SAMPLES=$(wc -l < train_raw.jsonl)
+    echo -e "${GREEN}✓${NC} Dataset ready: $NUM_SAMPLES samples"
+fi
 
-echo "✓ Helper scripts created:"
-echo "  • download_models.sh - Pre-download models"
-echo "  • test_checkpoint.py - Test a specific checkpoint"
-echo "  • validate_dataset.py - Validate training JSONL"
-echo "  • monitor_training.sh - Live training monitor"
 echo ""
 
-# Step 6: Final instructions
+# Make scripts executable
+chmod +x *.sh *.py 2>/dev/null || true
+
+# Calculate configuration
+BATCH_SIZE=10
+if [ "$NUM_GPUS" -ge 8 ]; then
+    GRAD_ACCUM=1
+    EPOCHS=3
+    EST_TIME="~1.5 hours"
+    EST_COST="~\$1.50"
+elif [ "$NUM_GPUS" -ge 4 ]; then
+    GRAD_ACCUM=2
+    EPOCHS=5
+    EST_TIME="~2.5 hours"
+    EST_COST="~\$1.20"
+else
+    BATCH_SIZE=8
+    GRAD_ACCUM=4
+    EPOCHS=8
+    EST_TIME="~6-8 hours"
+    EST_COST="~\$2.00-3.00"
+fi
+
+EFFECTIVE_BATCH=$((NUM_GPUS * BATCH_SIZE * GRAD_ACCUM))
+
+# Pre-download models (optional)
+echo "=========================================="
+echo "🤖 Pre-downloading models..."
+echo "=========================================="
+echo ""
+echo "This will download ~4GB to cache. Skip if you want to save bandwidth."
+echo "(Models will be downloaded automatically during training if skipped)"
+echo ""
+
+read -t 10 -p "Download now? (y/N, auto-skip in 10s): " -n 1 -r REPLY || REPLY='n'
+echo
+
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "Downloading models..."
+    python3 << 'EOF'
+from transformers import AutoConfig
+from qwen_tts import Qwen3TTSTokenizer
+import sys
+
+try:
+    print('  • Qwen3-TTS-12Hz-1.7B-Base...', end=' ')
+    sys.stdout.flush()
+    AutoConfig.from_pretrained('Qwen/Qwen3-TTS-12Hz-1.7B-Base')
+    print('✓')
+    
+    print('  • Qwen3-TTS-Tokenizer-12Hz...', end=' ')
+    sys.stdout.flush()
+    Qwen3TTSTokenizer.from_pretrained('Qwen/Qwen3-TTS-Tokenizer-12Hz', device_map='cpu')
+    print('✓')
+    
+    print('\n✓ Models cached successfully')
+except Exception as e:
+    print(f'\n⚠ Error caching models: {e}')
+    print('Models will be downloaded during training')
+EOF
+else
+    echo "Skipped - models will download on first use"
+fi
+
+echo ""
+
+# Summary
 echo "=========================================="
 echo "✅ Setup Complete!"
 echo "=========================================="
 echo ""
-echo "📋 Next Steps:"
+echo "📊 Configuration Summary:"
+echo "  • Working directory: $WORK_DIR"
+echo "  • GPUs detected: $NUM_GPUS"
+echo "  • Dataset samples: $NUM_SAMPLES"
+echo "  • Batch size per GPU: $BATCH_SIZE"
+echo "  • Gradient accumulation: $GRAD_ACCUM"
+echo "  • Effective batch size: $EFFECTIVE_BATCH"
+echo "  • Training epochs: $EPOCHS"
 echo ""
-echo "1. Upload your training data:"
-echo "   scp -P <PORT> train_raw.jsonl root@<IP>:$(pwd)/"
+echo "⏱️  Estimated Training:"
+echo "  • Time: $EST_TIME"
+echo "  • Cost: $EST_COST"
 echo ""
-echo "2. (Optional) Pre-download models to avoid delays:"
-echo "   ./download_models.sh"
+echo "=========================================="
+echo "🚀 Ready to Start Training!"
+echo "=========================================="
 echo ""
-echo "3. Validate your dataset:"
-echo "   ./validate_dataset.py --jsonl train_raw.jsonl"
+echo "Next steps:"
 echo ""
-echo "4. Copy optimized training scripts (if not already done)"
+echo "1. (Optional) Validate your dataset:"
+echo "   python3 validate_dataset.py --jsonl train_raw.jsonl"
 echo ""
-echo "5. Start training:"
-echo "   chmod +x train_vast.sh"
+echo "2. Start training:"
 echo "   ./train_vast.sh"
 echo ""
-echo "6. Monitor training (in another terminal):"
+echo "   Or with tmux (recommended to survive disconnects):"
+echo "   tmux new -s training"
+echo "   ./train_vast.sh"
+echo "   # Detach: Ctrl+B then D"
+echo "   # Reattach: tmux attach -t training"
+echo ""
+echo "3. Monitor training (in another terminal):"
 echo "   ./monitor_training.sh"
-echo "   # or"
-echo "   supervisorctl start tensorboard"
-echo "   # Then access tensorboard at http://<INSTANCE_IP>:6006"
+echo ""
+echo "4. View Tensorboard (optional):"
+echo "   tensorboard --logdir output_italian_tts --host 0.0.0.0 --port 6006"
+echo ""
+echo "5. After training completes, download your checkpoint:"
+echo "   tar -czf checkpoint.tar.gz output_italian_tts/checkpoint-best"
+echo "   scp -P <PORT> root@<IP>:$WORK_DIR/checkpoint.tar.gz ."
 echo ""
 echo "=========================================="
 echo ""
-echo "💡 Useful Commands:"
-echo "  • Check GPU: nvidia-smi"
-echo "  • View logs: tail -f output_italian_tts/training_*.log"
-echo "  • Test checkpoint: ./test_checkpoint.py --checkpoint output_italian_tts/checkpoint-best"
-echo "  • Compress checkpoint: tar -czf checkpoint.tar.gz output_italian_tts/checkpoint-best"
+echo "💡 Pro Tips:"
+echo "  • GPU usage should be >90%: nvidia-smi -l 1"
+echo "  • Watch logs live: tail -f output_italian_tts/training_*.log"
+echo "  • Training continues if you disconnect (use tmux!)"
+echo "  • Stop instance when done to avoid charges"
 echo ""
-echo "🆘 Need Help?"
-echo "  • Check setup guide: cat ../VAST_AI_SETUP_GUIDE.md"
-echo "  • Qwen3-TTS docs: https://github.com/QwenLM/Qwen3-TTS"
+echo "🆘 Having issues? Check:"
+echo "  • https://github.com/OhMySimo/Qwen3-TTS-finetuning/issues"
+echo "  • README: cat README.md"
 echo ""
-echo "=========================================="
-echo "Happy training! 🚀"
+echo "Happy training! 🎉"
 echo "=========================================="
