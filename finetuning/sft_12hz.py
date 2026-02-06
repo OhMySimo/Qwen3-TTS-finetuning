@@ -15,6 +15,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, random_split
 from transformers import AutoConfig
+from huggingface_hub import snapshot_download
 from tqdm import tqdm
 
 target_speaker_embedding = None
@@ -71,7 +72,19 @@ def train():
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
     )
+    # --- AGGIUNGI QUESTE RIGHE QUI ---
+    if hasattr(qwen3tts.model, "gradient_checkpointing_enable"):
+        qwen3tts.model.gradient_checkpointing_enable()
+    
+    # Disabilita il cache del decoder (necessario quando si usa gradient checkpointing)
+    qwen3tts.model.config.use_cache = False
+    # ---------------------------------
+
     config = AutoConfig.from_pretrained(MODEL_PATH)
+    # ... (resto del codice)
+    
+    # Get actual cached model path for checkpoint saving
+    actual_model_path = snapshot_download(MODEL_PATH)
 
     # Carica e splitta dataset
     train_data = open(args.train_jsonl).readlines()
@@ -132,6 +145,9 @@ def train():
     if val_dataloader:
         val_dataloader = accelerator.prepare(val_dataloader)
 
+    # Get unwrapped model for accessing attributes (needed for DDP)
+    unwrapped_model = accelerator.unwrap_model(model)
+
     # Training loop
     model.train()
     global_step = 0
@@ -157,25 +173,25 @@ def train():
                 codec_0_labels = batch['codec_0_labels']
                 codec_mask = batch['codec_mask']
 
-                speaker_embedding = model.speaker_encoder(ref_mels.to(model.device).to(model.dtype)).detach()
+                speaker_embedding = unwrapped_model.speaker_encoder(ref_mels.to(unwrapped_model.device).to(unwrapped_model.dtype)).detach()
                 if target_speaker_embedding is None:
                     target_speaker_embedding = speaker_embedding
 
                 input_text_ids = input_ids[:, :, 0]
                 input_codec_ids = input_ids[:, :, 1]
 
-                input_text_embedding = model.talker.model.text_embedding(input_text_ids) * text_embedding_mask
-                input_codec_embedding = model.talker.model.codec_embedding(input_codec_ids) * codec_embedding_mask
+                input_text_embedding = unwrapped_model.talker.model.text_embedding(input_text_ids) * text_embedding_mask
+                input_codec_embedding = unwrapped_model.talker.model.codec_embedding(input_codec_ids) * codec_embedding_mask
                 input_codec_embedding[:, 6, :] = speaker_embedding
 
                 input_embeddings = input_text_embedding + input_codec_embedding
 
                 for i in range(1, 16):
-                    codec_i_embedding = model.talker.code_predictor.get_input_embeddings()[i - 1](codec_ids[:, :, i])
+                    codec_i_embedding = unwrapped_model.talker.code_predictor.get_input_embeddings()[i - 1](codec_ids[:, :, i])
                     codec_i_embedding = codec_i_embedding * codec_mask.unsqueeze(-1)
                     input_embeddings = input_embeddings + codec_i_embedding
 
-                outputs = model.talker(
+                outputs = unwrapped_model.talker(
                     inputs_embeds=input_embeddings[:, :-1, :],
                     attention_mask=attention_mask[:, :-1],
                     labels=codec_0_labels[:, 1:],
@@ -186,7 +202,7 @@ def train():
                 talker_hidden_states = hidden_states[codec_mask[:, 1:]]
                 talker_codec_ids = codec_ids[codec_mask]
 
-                sub_talker_logits, sub_talker_loss = model.talker.forward_sub_talker_finetune(
+                sub_talker_logits, sub_talker_loss = unwrapped_model.talker.forward_sub_talker_finetune(
                     talker_codec_ids, talker_hidden_states
                 )
 
@@ -243,7 +259,7 @@ def train():
                         best_val_loss = val_loss
                         save_checkpoint(
                             model, config, target_speaker_embedding, args, 
-                            MODEL_PATH, f"checkpoint-best", accelerator
+                            actual_model_path, f"checkpoint-best", accelerator
                         )
                 model.train()
 
@@ -251,18 +267,19 @@ def train():
             if global_step % args.save_steps == 0 and accelerator.is_main_process:
                 save_checkpoint(
                     model, config, target_speaker_embedding, args,
-                    MODEL_PATH, f"checkpoint-step-{global_step}", accelerator
+                    actual_model_path, f"checkpoint-step-{global_step}", accelerator
                 )
 
         # Save a fine epoch
         if accelerator.is_main_process:
             save_checkpoint(
                 model, config, target_speaker_embedding, args,
-                MODEL_PATH, f"checkpoint-epoch-{epoch}", accelerator
+                actual_model_path, f"checkpoint-epoch-{epoch}", accelerator
             )
 
 def evaluate(model, dataloader, accelerator):
     model.eval()
+    unwrapped_model = accelerator.unwrap_model(model)
     total_loss = 0
     num_batches = 0
     
@@ -277,22 +294,22 @@ def evaluate(model, dataloader, accelerator):
             codec_0_labels = batch['codec_0_labels']
             codec_mask = batch['codec_mask']
 
-            speaker_embedding = model.speaker_encoder(ref_mels.to(model.device).to(model.dtype))
+            speaker_embedding = unwrapped_model.speaker_encoder(ref_mels.to(unwrapped_model.device).to(unwrapped_model.dtype))
             input_text_ids = input_ids[:, :, 0]
             input_codec_ids = input_ids[:, :, 1]
 
-            input_text_embedding = model.talker.model.text_embedding(input_text_ids) * text_embedding_mask
-            input_codec_embedding = model.talker.model.codec_embedding(input_codec_ids) * codec_embedding_mask
+            input_text_embedding = unwrapped_model.talker.model.text_embedding(input_text_ids) * text_embedding_mask
+            input_codec_embedding = unwrapped_model.talker.model.codec_embedding(input_codec_ids) * codec_embedding_mask
             input_codec_embedding[:, 6, :] = speaker_embedding
 
             input_embeddings = input_text_embedding + input_codec_embedding
 
             for i in range(1, 16):
-                codec_i_embedding = model.talker.code_predictor.get_input_embeddings()[i - 1](codec_ids[:, :, i])
+                codec_i_embedding = unwrapped_model.talker.code_predictor.get_input_embeddings()[i - 1](codec_ids[:, :, i])
                 codec_i_embedding = codec_i_embedding * codec_mask.unsqueeze(-1)
                 input_embeddings = input_embeddings + codec_i_embedding
 
-            outputs = model.talker(
+            outputs = unwrapped_model.talker(
                 inputs_embeds=input_embeddings[:, :-1, :],
                 attention_mask=attention_mask[:, :-1],
                 labels=codec_0_labels[:, 1:],
@@ -303,7 +320,7 @@ def evaluate(model, dataloader, accelerator):
             talker_hidden_states = hidden_states[codec_mask[:, 1:]]
             talker_codec_ids = codec_ids[codec_mask]
 
-            _, sub_talker_loss = model.talker.forward_sub_talker_finetune(talker_codec_ids, talker_hidden_states)
+            _, sub_talker_loss = unwrapped_model.talker.forward_sub_talker_finetune(talker_codec_ids, talker_hidden_states)
             loss = outputs.loss + 0.3 * sub_talker_loss
 
             total_loss += loss.item()
