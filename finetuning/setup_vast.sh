@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Setup script for Qwen3-TTS Italian fine-tuning on Vast.ai
 # Can be executed directly with: curl -sSL <URL> | bash
+# start with: wget --show-progress -q https://github.com/OhMySimo/Qwen3-TTS-finetuning/releases/download/startup/setup_vast.sh;
 
 set -e
 
@@ -184,9 +185,7 @@ if [ "$SKIP_DOWNLOAD" -eq 0 ]; then
         echo -e "${RED}❌ Extraction failed!${NC}"
         exit 1
     fi
-    
-    rm datasetv2.zip
-    
+        
     # Elimina il train_raw.jsonl estratto dallo zip e ripristina quello corretto
     echo "📝 Restoring correct train_raw.jsonl..."
     if [ -f "train_raw.jsonl" ]; then
