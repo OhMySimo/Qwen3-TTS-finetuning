@@ -89,6 +89,13 @@ WORK_DIR=$(pwd)
 echo -e "${GREEN}✓${NC} Repository ready at: $WORK_DIR"
 echo ""
 
+# Rinomina train_raw.jsonl esistente (se presente)
+if [ -f "train_raw.jsonl" ]; then
+    echo "📝 Renaming existing train_raw.jsonl to train_raw_correct.jsonl..."
+    mv train_raw.jsonl train_raw_correct.jsonl
+    echo -e "${GREEN}✓${NC} Renamed to train_raw_correct.jsonl"
+fi
+
 # Install dependencies
 echo "=========================================="
 echo "📚 Installing dependencies..."
@@ -148,14 +155,15 @@ echo "📊 Downloading Italian dataset..."
 echo "=========================================="
 echo ""
 
-if [ -f "train_raw.jsonl" ]; then
-    NUM_SAMPLES=$(wc -l < train_raw.jsonl 2>/dev/null || echo "0")
+# Check if train_raw_correct.jsonl exists and is valid
+if [ -f "train_raw_correct.jsonl" ]; then
+    NUM_SAMPLES=$(wc -l < train_raw_correct.jsonl 2>/dev/null || echo "0")
     if [ "$NUM_SAMPLES" -gt "1000" ]; then
         echo -e "${GREEN}✓${NC} Dataset already exists ($NUM_SAMPLES samples)"
         SKIP_DOWNLOAD=1
     else
         echo -e "${YELLOW}⚠${NC} Dataset file exists but seems incomplete, re-downloading..."
-        rm -f train_raw.jsonl audio_dataset/ datasetv2.zip
+        rm -f train_raw_correct.jsonl audio_dataset/ datasetv2.zip
         SKIP_DOWNLOAD=0
     fi
 else
@@ -179,8 +187,27 @@ if [ "$SKIP_DOWNLOAD" -eq 0 ]; then
     
     rm datasetv2.zip
     
+    # Elimina il train_raw.jsonl estratto dallo zip e ripristina quello corretto
+    echo "📝 Restoring correct train_raw.jsonl..."
+    if [ -f "train_raw.jsonl" ]; then
+        rm train_raw.jsonl
+        echo -e "${GREEN}✓${NC} Removed extracted train_raw.jsonl"
+    fi
+    
+    if [ -f "train_raw_correct.jsonl" ]; then
+        mv train_raw_correct.jsonl train_raw.jsonl
+        echo -e "${GREEN}✓${NC} Restored train_raw_correct.jsonl as train_raw.jsonl"
+    fi
+    
     NUM_SAMPLES=$(wc -l < train_raw.jsonl)
     echo -e "${GREEN}✓${NC} Dataset ready: $NUM_SAMPLES samples"
+else
+    # Se abbiamo saltato il download, rinomina comunque train_raw_correct.jsonl in train_raw.jsonl
+    if [ -f "train_raw_correct.jsonl" ]; then
+        mv train_raw_correct.jsonl train_raw.jsonl
+        echo -e "${GREEN}✓${NC} Using existing dataset"
+        NUM_SAMPLES=$(wc -l < train_raw.jsonl)
+    fi
 fi
 
 echo ""
