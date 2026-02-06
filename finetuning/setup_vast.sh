@@ -15,6 +15,22 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# --- AGGIUNTA: CONTROLLO E INSTALLAZIONE TMUX ---
+echo "🔍 Checking for tmux..."
+if ! command -v tmux &> /dev/null; then
+    echo -e "${YELLOW}📦 tmux non trovato. Installazione in corso...${NC}"
+    apt update && apt install tmux -y
+    echo -e "${GREEN}✓${NC} tmux installato."
+else
+    echo -e "${GREEN}✓${NC} tmux è già presente."
+fi
+
+# Abilita il mouse in tmux per scorrere i log facilmente
+echo "set -g mouse on" > ~/.tmux.conf
+echo -e "${GREEN}✓${NC} Configurazione mouse per tmux applicata."
+echo ""
+# -----------------------------------------------
+
 # Check if we're on Vast.ai (optional)
 if [ ! -d "/workspace" ]; then
     echo -e "${YELLOW}⚠️  Warning: /workspace not found. Creating it...${NC}"
